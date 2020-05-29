@@ -23,8 +23,9 @@ const PORT = process.env.PORT;
 // Start express on the defined port
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`))
 
+// Webhook
 app.get("/motion-detected", async (req, res) => {
-    res.status(200).end()
+    res.status(200).end();
 
     await faceapi.nets.ssdMobilenetv1.loadFromDisk('weights');
 
@@ -37,4 +38,6 @@ app.get("/motion-detected", async (req, res) => {
     fs.writeFileSync('public/last-detection.jpg', out.toBuffer('image/jpeg'));
     console.log('Detection saved.')
 });
+
+// Static route, give access to everything in the public folder
 app.use(express.static('public'));
