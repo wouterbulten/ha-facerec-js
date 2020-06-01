@@ -16,18 +16,17 @@ if (process.env.TF_BINDINGS == 1) {
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
+let trainingDir = './faces'; // Default directory in the docker image
+if(process.env.FACES_DIR && fs.existsSync(process.env.FACES_DIR)) {
+    console.info(`Loading training images from ${process.env.FACES_DIR}`)
+    trainingDir = process.env.FACES_DIR;
+}
+
 async function train() {
     // Load required models
     await faceapi.nets.ssdMobilenetv1.loadFromDisk('weights');
     await faceapi.nets.faceLandmark68Net.loadFromDisk('weights');
     await faceapi.nets.faceRecognitionNet.loadFromDisk('weights');
-
-    // Get all classes
-    let trainingDir = '/facerec/faces'; // Default directory in the docker image
-    if(process.env.FACES_DIR && fs.existsSync(process.env.FACES_DIR)) {
-        console.info(`Loading training images from ${process.env.FACES_DIR}`)
-        trainingDir = process.env.FACES_DIR;
-    }
 
     // Traverse the training dir and get all classes (1 dir = 1 class)
     const classes = fs.readdirSync(trainingDir, { withFileTypes: true })
@@ -56,6 +55,53 @@ let faceMatcher = null;
 
 // Initialize express
 const app = express();
+
+// Add a new training sample
+app.get("/add-face/:name", async (req, res) => {
+    // Load an image
+    const img = await canvas.loadImage(process.env.CAMERA_URL);
+    const name = req.params.name;
+
+    if(!name.match(/^[0-9a-zA-Z]+$/)) {
+        res.status(400)
+            .send("Invalid name provided for training sample.")
+            .end();
+        return;
+    }
+
+    console.info(`Trying to detect new training sample for '${name}'.`)
+    const results = await faceapi.detectAllFaces(img);
+
+    if(results.length > 1) {
+        res.status(422)
+            .send("Multiple faces detected in the image, cannot save training data.")
+            .end();
+        return;
+    }
+    
+    if(results.length == 0) {
+        res.status(422)
+            .send("No faces detected in the image, cannot save training data.")
+            .end();
+        return;
+    }
+
+    const faces = await faceapi.extractFaces(img, results);
+
+    // Check if this a new person
+    const outputDir = path.join(trainingDir, name);
+    if(!fs.existsSync(outputDir)) {
+        console.info(`Creating training dir for new person '${name}'.`);
+        fs.mkdirSync(outputDir);
+    }
+
+    // Write detections to public folder
+    fs.writeFileSync(path.join(outputDir, `${Date.now()}.jpg`), faces[0].toBuffer('image/jpeg'));
+    console.info('New training sample saved.');
+
+    res.status(200).send('OK');
+
+});
 
 // Webhook
 app.get("/motion-detected", async (req, res) => {
