@@ -79,7 +79,7 @@ app.get("/add-face/:name", async (req, res) => {
         return;
     }
     
-    if(results.length == 0) {
+    if(results.descriptors.length == 0) {
         res.status(422)
             .send("No faces detected in the image, cannot save training data.")
             .end();
@@ -115,7 +115,7 @@ app.get("/motion-detected", async (req, res) => {
         .withFaceLandmarks()
         .withFaceDescriptors();
 
-    console.info(`${results.length} faces detected`);
+    console.info(`${results.length} face(s) detected`);
 
     // Create canvas to save to disk
     const out = faceapi.createCanvasFromMedia(img);
@@ -132,6 +132,34 @@ app.get("/motion-detected", async (req, res) => {
     fs.writeFileSync('public/last-detection.jpg', out.toBuffer('image/jpeg'));
     console.log('Detection saved.');
 });
+
+// Directly show the output on screen
+app.get("/recognize", async (req, res) => {
+
+    const img = await canvas.loadImage(process.env.CAMERA_URL);
+
+    const results = await faceapi
+        .detectAllFaces(img)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+    console.info(`${results.length} face(s) detected`);
+
+    // Create canvas to save to disk
+    const out = faceapi.createCanvasFromMedia(img);
+    results.forEach(({detection, descriptor}) => {
+        const label = faceMatcher.findBestMatch(descriptor).toString();
+        console.info(`Detected face: ${label}`);
+
+        const drawBox = new faceapi.draw.DrawBox(detection.box, { label });
+        drawBox.draw(out)
+    });
+
+    res.set('Content-Type', 'image/jpeg');
+    out.createJPEGStream().pipe(res);
+
+});
+
 
 // Static route, give access to everything in the public folder
 app.use(express.static('public'));
