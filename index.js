@@ -1,7 +1,7 @@
 import express from 'express';
 import faceapi from "face-api.js";
 import canvas from 'canvas';
-import * as path from 'path';
+import path from 'path';
 import fs from 'fs';
 
 // Load TF bindings to speed up processing
@@ -16,28 +16,91 @@ if (process.env.TF_BINDINGS == 1) {
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
+async function train() {
+    // Load required models
+    await faceapi.nets.ssdMobilenetv1.loadFromDisk('weights');
+    await faceapi.nets.faceLandmark68Net.loadFromDisk('weights');
+    await faceapi.nets.faceRecognitionNet.loadFromDisk('weights');
+
+    // Get all classes
+    let trainingDir = '/facerec/faces'; // Default directory in the docker image
+    if(process.env.FACES_DIR && fs.existsSync(process.env.FACES_DIR)) {
+        console.info(`Loading training images from ${process.env.FACES_DIR}`)
+        trainingDir = process.env.FACES_DIR;
+    }
+
+    // Traverse the training dir and get all classes (1 dir = 1 class)
+    const classes = fs.readdirSync(trainingDir, { withFileTypes: true })
+        .filter(i => i.isDirectory())
+        .map(i => i.name);
+    console.info(`Found ${classes.length} different persons to learn.`);
+
+    const faceDescriptors = await Promise.all(classes.map(async className => {
+        
+        const images = fs.readdirSync(path.join(trainingDir, className), { withFileTypes: true })
+            .filter(i => i.isFile())
+            .map(i => path.join(trainingDir, className, i.name));
+
+        // Load all images for this class and retrieve face descriptors
+        const descriptors = await Promise.all(images.map(async path => {
+            const img = await canvas.loadImage(path);
+            return await faceapi.computeFaceDescriptor(img);
+        }));
+        
+        return new faceapi.LabeledFaceDescriptors(className, descriptors);
+    }));
+
+    return new faceapi.FaceMatcher(faceDescriptors);
+}
+let faceMatcher = null;
+
 // Initialize express
 const app = express();
-const PORT = process.env.PORT;
-
-// Start express on the defined port
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`))
 
 // Webhook
 app.get("/motion-detected", async (req, res) => {
     res.status(200).end();
-
-    await faceapi.nets.ssdMobilenetv1.loadFromDisk('weights');
+    console.info("Motion detected");
 
     const img = await canvas.loadImage(process.env.CAMERA_URL);
 
-    const detections = await faceapi.detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }));
+    const results = await faceapi
+        .detectAllFaces(img)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+    console.info(`${results.length} faces detected`);
+
+    // Create canvas to save to disk
     const out = faceapi.createCanvasFromMedia(img);
-    faceapi.draw.drawDetections(out, detections);
-  
+
+    results.forEach(({detection, descriptor}) => {
+        const label = faceMatcher.findBestMatch(descriptor).toString();
+        console.info(`Detected face: ${label}`);
+
+        const drawBox = new faceapi.draw.DrawBox(detection.box, { label });
+        drawBox.draw(out)
+    });
+
+    // Write detections to public folder
     fs.writeFileSync('public/last-detection.jpg', out.toBuffer('image/jpeg'));
-    console.log('Detection saved.')
+    console.log('Detection saved.');
 });
 
 // Static route, give access to everything in the public folder
 app.use(express.static('public'));
+
+async function start() {
+    
+    console.info("Start training recognition model.")
+    faceMatcher = await train();
+    console.info("Finished training");
+
+    const PORT = process.env.PORT;
+
+    // Start express on the defined port
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`))
+}
+
+start();
+
