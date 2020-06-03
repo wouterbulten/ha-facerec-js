@@ -79,7 +79,7 @@ app.get("/add-face/:name", async (req, res) => {
         return;
     }
     
-    if(results.descriptors.length == 0) {
+    if(results.length == 0) {
         res.status(422)
             .send("No faces detected in the image, cannot save training data.")
             .end();
@@ -97,10 +97,8 @@ app.get("/add-face/:name", async (req, res) => {
 
     // Write detections to public folder
     fs.writeFileSync(path.join(outputDir, `${Date.now()}.jpg`), faces[0].toBuffer('image/jpeg'));
-    console.info('New training sample saved.');
-
+    console.info('New training sample saved.');    
     res.status(200).send('OK');
-
 });
 
 // Webhook
